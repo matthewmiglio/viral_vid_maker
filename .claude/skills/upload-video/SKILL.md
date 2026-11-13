@@ -79,7 +79,7 @@ playwright install chromium
 
 ## Nightly job
 
-Windows scheduled task **`skate_clip_nightly`** runs `scripts/post_nightly.py` once a
+Windows scheduled task **`viral_vid_maker_nightly`** runs `scripts/post_nightly.py` once a
 day at a random time between 3:00 and 6:00 AM (3h random delay on a 3 AM trigger).
 One clip a night keeps a human cadence.
 
