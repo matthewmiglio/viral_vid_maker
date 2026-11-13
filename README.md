@@ -1,255 +1,90 @@
-# Skate — AI-Powered YouTube → Viral Shorts CLI
+# viral_vid_maker
 
-> Turn long-form videos into viral-ready vertical shorts, entirely on your local machine. Free, no API keys, no cloud.
+> Turn long-form YouTube videos into captioned vertical shorts and auto-post one to YouTube every night — all locally, no paid APIs.
 
-Saw a bunch of paid tools doing this — why pay when you can run it locally? Skate uses **faster-whisper** for transcription, **Ollama** for AI ranking, **OpenCV** for face tracking, and **FFmpeg** for rendering. Everything runs on your machine.
+This repo is a small pipeline wrapped around an open-source clipping engine:
 
-![Preview](images/preview.png)
+1. **`/make_clips`** — point it at a YouTube URL. It downloads the video, transcribes it locally, has Claude pick the most clippable moments, renders vertical captioned clips, and writes per-clip upload metadata.
+2. **`youtube_uploader/`** — browser-automation YouTube uploader (drives YouTube Studio with Playwright, no Data API or quota).
+3. **`/upload-video`** — upload a clip, or post one random unposted clip, to a dedicated channel.
+4. **Nightly job** — a Windows scheduled task posts one random clip at a random time between 3-6 AM, deduped so nothing posts twice.
 
-# Video Proof
-
-I built a random YouTube channel powered entirely by an AI agent. The agent was given access to skate-cli, which it used to find, clip, and publish random videos automatically. Feel free to check the channel for proof.
-
-[🎥 Video Proof](https://www.youtube.com/@the.ceo.podcast)
+The [`skate`](https://github.com/r2hu1/skate) CLI (faster-whisper + OpenCV + FFmpeg) is the clipping engine underneath, vendored in `src/` and `skate/`. It does transcription, face-tracked cropping, and rendering. **Clip ranking was moved off the local LLM to Claude** — the local model picked weak moments — so `/make_clips` dumps transcript chunks, Claude ranks them, and the picks are fed back into skate's render step.
 
 ---
 
-## Requirements
+## Pipeline: `/make_clips <youtube-url>`
 
-| Tool               | Purpose                    | Check                        |
-| ------------------ | -------------------------- | ---------------------------- |
-| **Bun**            | Runtime & package manager  | `bun --version`              |
-| **FFmpeg**         | Video cutting & processing | `ffmpeg -version`            |
-| **yt-dlp**         | YouTube downloading        | `yt-dlp --version`           |
-| **Ollama**         | Local LLM for AI ranking   | `ollama --version`           |
-| **Python 3**       | Whisper & OpenCV scripts   | `python3 --version`          |
-| **faster-whisper** | Local transcription        | installed via `setup-python` |
-| **OpenCV**         | Face detection             | installed via `setup-python` |
+```
+URL → yt-dlp download → faster-whisper transcribe (GPU) → chunk transcript
+    → Claude ranks chunks for clippability → render vertical + MrBeast captions
+    → finalize into clips/<slug>/{video.mp4, youtube_upload_metadata.json, captions.srt}
+```
 
-### Recommended Ollama Model
+Output per clip (`skate/output/<video>/clips/<clip-slug>/`):
+
+| File | Contents |
+| --- | --- |
+| `video.mp4` | 1080×1920 vertical, face-tracked crop, captions burned in |
+| `youtube_upload_metadata.json` | `post_title`, `post_description`, `generated_at_timestamp` |
+| `captions.srt` | plain captions |
+
+The skill definition and its helper scripts live in `.claude/skills/make_clips/`.
+
+---
+
+## Uploading
+
+Posts to the dedicated channel **`ryanreed5151471885@gmail.com`**. Its logged-in
+browser profile lives in `youtube_uploader/profiles/` (git-ignored — it holds live
+session cookies; **never commit it**).
 
 ```bash
-ollama pull llama3.2:3b
+# one random unposted clip (what the nightly job runs)
+python scripts/post_nightly.py              # --dry-run to preview the pick
+
+# a specific clip
+python youtube_uploader/upload.py \
+  --video "skate/output/<video>/clips/<clip>/video.mp4" \
+  --title "..." --description "..." --profile ryanreed5151471885@gmail.com
 ```
+
+Headless by default, publishes Public / not-for-kids. See `.claude/skills/upload-video/`.
+
+### Dedup
+
+`posted.json` (repo root, git-ignored) maps each posted clip dir to its upload
+record. `post_nightly.py` skips anything already in it, so no clip posts twice.
+
+### Nightly auto-post
+
+Windows scheduled task **`viral_vid_maker_nightly`**: daily 3 AM trigger + 3-hour
+random delay, so it fires once at a random time between 3-6 AM. One clip a night.
 
 ---
 
-## Installation
-
-### via npm (recommended)
+## Setup
 
 ```bash
-npm install -g @r2hu1_npm/skate
-skate setup
+bun install                                       # engine deps
+python -m pip install -r youtube_uploader/requirements.txt   # uploader (Playwright)
+# skate's own Python env (faster-whisper + OpenCV) is at ~/.skate/venv via `skate setup`
 ```
 
-### from source
-
-```bash
-git clone https://github.com/r2hu1/skate.git
-cd skate
-bun install
-bun run setup
-bun link
-```
-
-### Python environment
-
-```bash
-skate setup
-```
-
-This prompts for a project directory, creates a virtual environment at `~/.skate/venv`, and installs `faster-whisper`, `opencv-contrib-python`, and `numpy`. Output and temp dirs are set to `<projectDir>/skate/output` and `<projectDir>/skate/temp`.
+Config for the clipping engine is at `~/.skate/config.json` (clips count, min/max
+length, crop, output dirs).
 
 ---
 
-## CLI Usage
+## Caveat
 
-```bash
-skate https://youtube.com/watch?v=abc123    # download + process
-skate clip video.mp4                         # local file
-skate analyze video.mp4                      # analyze only (skip render)
-skate render video.mp4                       # render from cached analysis
-skate watch ./videos                         # watch directory for new files
-skate setup                                  # install Python deps (whisper + opencv)
-skate doctor                                 # check dependencies
-
-# With flags
-skate clip video.mp4 --crop=1               # 1:1 square crop for mobile shorts
-skate clip video.mp4 --captions=false       # no captions burned in
-skate clip video.mp4 --crop=1 --captions=false  # both
-```
-
-### Options
-
-| Flag            | Description                                |
-| --------------- | ------------------------------------------ |
-| `--no-crop`     | Disable face tracking, use center crop     |
-| `--crop=true`   | Enable face tracking (default)             |
-| `--crop=1`      | Crop to 1:1 square for mobile shorts       |
-| `--captions=false` | Disable caption burn-in                 |
-| `--no-captions`   | Disable caption burn-in                 |
-
-### Configuration
-
-Config is stored at `~/.skate/config.json` and auto-created on first run.
-
-```json
-{
-  "model": "llama3.2:3b",
-  "clips": 10,
-  "minLength": 20,
-  "maxLength": 90,
-  "subtitleStyle": "minimal",
-  "projectDir": ".",
-  "outputDir": "./skate/output",
-  "tempDir": "./skate/temp",
-  "cacheDir": "~/.skate/cache",
-  "ollamaUrl": "http://localhost:11434",
-  "crop": true
-}
-```
-
-| Field           | Default                  | Description                                     |
-| --------------- | ------------------------ | ----------------------------------------------- |
-| `model`         | `llama3.2:3b`            | Ollama model for ranking                        |
-| `clips`         | `10`                     | Number of clips to produce                      |
-| `minLength`     | `20`                     | Minimum clip length (seconds)                   |
-| `maxLength`     | `90`                     | Maximum clip length (seconds)                   |
-| `subtitleStyle` | `minimal`                | Subtitle style (`minimal`, `tiktok`, `mrbeast`) |
-| `projectDir`    | `.`                      | Base project directory (set via `skate setup`)  |
-| `outputDir`     | `./skate/output`         | Output directory (derived from projectDir)      |
-| `tempDir`       | `./skate/temp`           | Working temp directory (derived from projectDir)|
-| `cacheDir`      | `~/.skate/cache`         | Cache directory                                 |
-| `ollamaUrl`     | `http://localhost:11434` | Ollama API URL                                  |
-| `crop`          | `true`                   | Enable face tracking for smart vertical crop    |
+Re-uploading others' content risks Content ID claims, copyright strikes, and
+account termination. Bans come from content and posting velocity, not the transport.
+One clip a night is a deliberately slow, human cadence; the account is still at risk.
 
 ---
 
-## How It Works
+## Credits
 
-```
-Input (URL or file)
-  → Download (yt-dlp)
-  → Transcribe (faster-whisper)
-  → Chunk transcript into segments
-  → Score heuristically (speaking rate, emotion, story, hooks)
-  → Auto-start Ollama if not running
-  → Rank with local LLM (hook strength, momentum, value)
-  → Select best clips (no overlap)
-  → Track faces for smart vertical crop
-  → Render clips with subtitles burned in
-  → Output organized shorts + captions
-```
-
-### Pipeline Steps
-
-| Step            | Description                                                        |
-| --------------- | ------------------------------------------------------------------ |
-| **Download**    | Pulls video from YouTube via yt-dlp or uses local file             |
-| **Transcribe**  | Runs faster-whisper for speech-to-text with word-level timestamps  |
-| **Chunk**       | Splits transcript into 20-90 second natural segments               |
-| **Score**       | Heuristic scoring — speaking rate, emotion, story structure, hooks |
-| **Rank**        | Sends top candidates to Ollama for virality scoring (auto-starts)  |
-| **Select**      | Picks best clips based on combined heuristic + AI scores           |
-| **Track Faces** | Detects faces per frame via OpenCV for smart vertical crop         |
-| **Render**      | Cuts clips, applies crop, burns in subtitles                       |
-
----
-
-## Output Structure
-
-```
-<projectDir>/skate/output/
-└── <video-name>/
-    ├── clips/
-    │   ├── clip-01.mp4
-    │   ├── clip-02.mp4
-    │   └── clip-03.mp4
-    ├── captions/
-    │   ├── clip-01.srt
-    │   └── clip-02.srt
-    └── metadata.json
-```
-
----
-
-## npm Scripts
-
-| Script                 | Command                                       |
-| ---------------------- | --------------------------------------------- |
-| `skate`                | Run Skate                                     |
-| `bun run dev`          | Run with watch mode                           |
-| `bun run typecheck`    | TypeScript type checking                      |
-| `bun run setup-python` | Create venv and install Python deps           |
-
----
-
-## Caching
-
-Skate caches aggressively at `~/.skate/cache`:
-
-- Downloaded video/audio files
-- Transcripts
-- Face tracking data
-- Analysis results
-
-Re-running is fast — only changed steps are re-executed.
-
----
-
-## Project Structure
-
-```
-skate/
-├── scripts/
-│   ├── face_detect.py           # OpenCV face detection
-│   ├── whisper_transcribe.py    # faster-whisper transcription
-│   └── requirements.txt         # Python dependencies
-├── src/
-│   ├── commands/
-│   │   ├── clip.ts              # Process local video
-│   │   ├── analyze.ts           # Analysis only pipeline
-│   │   ├── render.ts            # Render from cached analysis
-│   │   ├── watch.ts             # Watch directory mode
-│   │   └── doctor.ts            # Dependency checker
-│   ├── core/
-│   │   ├── pipeline.ts          # Main pipeline orchestrator
-│   │   ├── downloader.ts        # yt-dlp integration
-│   │   ├── transcriber.ts       # Whisper bridge
-│   │   ├── chunker.ts           # Transcript chunking
-│   │   ├── scorer.ts            # Heuristic scoring
-│   │   ├── ranker.ts            # AI ranking bridge
-│   │   ├── tracker.ts           # Face tracking
-│   │   ├── renderer.ts          # FFmpeg rendering
-│   │   └── subtitles.ts         # SRT/ASS generation
-│   ├── ai/
-│   │   ├── prompts.ts           # LLM prompt templates
-│   │   ├── ollama.ts            # Ollama API client
-│   │   └── ranking.ts           # AI ranking logic
-│   ├── vision/
-│   │   ├── face.ts              # Face detection
-│   │   ├── scene.ts             # Scene detection
-│   │   └── crop.ts              # Smart crop path
-│   ├── ui/
-│   │   └── tui.ts               # Terminal spinner UI
-│   ├── config.ts                # Configuration loader
-│   ├── types.ts                 # TypeScript types
-│   └── index.ts                 # CLI entry point
-├── skate/output/                # Rendered clips
-├── skate/temp/                  # Working files
-├── package.json
-├── tsconfig.json
-└── README.md
-```
-
----
-
-## Why Build This?
-
-Every "AI shorts" tool out there charges $20-50/month or requires API keys that bill per minute. Skate is:
-
-- **100% local** — nothing leaves your machine
-- **Free** — no subscriptions, no API costs
-- **Private** — your videos never hit a third-party server
-- **Customizable** — swap models, tweak prompts, adjust scoring
+Clipping engine: [r2hu1/skate](https://github.com/r2hu1/skate) (MIT). Uploader
+module adapted from a private browser-automation uploader.
