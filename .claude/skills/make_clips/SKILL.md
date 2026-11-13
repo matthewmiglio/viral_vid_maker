@@ -9,13 +9,13 @@ Turn one YouTube URL into short vertical clips. The ranking is done by **Claude 
 
 ## Fixed environment (this machine)
 
-- Repo root: `M:\my_files\my_programs\skate`
+- Repo root: `M:\my_files\my_programsiral_vid_maker`
 - Bun: `C:\Users\matt\.bun\bin\bun.exe`
 - venv python: `C:\Users\matt\.skate\venv\Scripts\python.exe` (invoke as `python -I <script>`)
 - Always export before any `bun`/skate call: `HF_HOME=/e/skate/hf` and `TMPDIR=/e/skate/tmp` (keeps model + temp off the nearly-full C: drive).
 - Analysis cache: `C:\Users\matt\.skate\cache\<slug>-analysis.json`
-- Downloaded video: `M:\my_files\my_programs\skate\skate\temp\<slug>\<ID>.webm`
-- Output: `M:\my_files\my_programs\skate\skate\output\<slug>\`
+- Downloaded video: `M:\my_files\my_programsiral_vid_maker\skate\temp\<slug>\<ID>.webm`
+- Output: `M:\my_files\my_programsiral_vid_maker\skate\output\<slug>\`
 - `<slug>` = the lowercased YouTube video id (e.g. `VCjT35E0RBY` -> `vcjt35e0rby`).
 - Scripts for this skill are in this skill's `scripts/` folder.
 
