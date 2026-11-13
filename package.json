@@ -1,0 +1,53 @@
+{
+  "name": "@r2hu1_npm/skate",
+  "version": "0.1.6",
+  "description": "AI-powered CLI that turns long videos into viral-ready vertical shorts — fully local, no API keys",
+  "type": "module",
+  "bin": {
+    "skate": "./src/index.ts"
+  },
+  "files": [
+    "src",
+    "scripts",
+    "package.json",
+    "README.md",
+    "tsconfig.json"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/r2hu1/skate"
+  },
+  "homepage": "https://github.com/r2hu1/skate",
+  "bugs": {
+    "url": "https://github.com/r2hu1/skate/issues"
+  },
+  "keywords": [
+    "shorts",
+    "vertical",
+    "yt-clipper",
+    "video",
+    "clip",
+    "youtube",
+    "ai",
+    "whisper",
+    "ollama",
+    "ffmpeg"
+  ],
+  "license": "MIT",
+  "engines": {
+    "bun": ">=1.0.0"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "typescript": "^5"
+  },
+  "scripts": {
+    "start": "bun run src/index.ts",
+    "dev": "bun --watch run src/index.ts",
+    "typecheck": "tsc --noEmit",
+    "postinstall": "echo '  Run \"skate setup\" to install Python dependencies (faster-whisper + OpenCV)'"
+  },
+  "dependencies": {
+    "ora": "^9.4.0"
+  }
+}

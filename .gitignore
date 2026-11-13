@@ -1,0 +1,63 @@
+# dependencies (bun install)
+node_modules
+__pycache__
+# output
+out
+dist
+*.tgz
+output
+models
+cache
+temp
+
+# code coverage
+coverage
+*.lcov
+
+# logs
+logs
+_.log
+report.[0-9]_.[0-9]_.[0-9]_.[0-9]_.json
+
+# dotenv environment variable files
+.env
+.env.development.local
+.env.test.local
+.env.production.local
+.env.local
+
+# caches
+.eslintcache
+.cache
+*.tsbuildinfo
+
+# IntelliJ based IDEs
+.idea
+
+# Finder (MacOS) folder config
+.DS_Store
+
+# ===== viral_vid_maker: secrets + generated content (public repo) =====
+# Live logged-in YouTube browser profiles (session cookies). NEVER commit.
+youtube_uploader/profiles/
+youtube_uploader/_debug/
+youtube_uploader/metadata.json
+youtube_uploader/history.json
+youtube_uploader/stats/
+
+# Upload dedup ledger (runtime state)
+posted.json
+
+# Generated clips, downloads, caches
+skate/output/
+skate/temp/
+skate/hf/
+*.webm
+*.mp4
+*.srt
+full_videos/
+downloads/
+
+# Python
+venv/
+*.pyc

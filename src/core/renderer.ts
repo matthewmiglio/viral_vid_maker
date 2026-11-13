@@ -1,0 +1,181 @@
+import { join } from "path";
+import { existsSync } from "fs";
+import type { ScoredChunk, CropFrame, SubtitleStyle } from "../types";
+import { generateSRT, generateASS } from "./subtitles";
+import { getSourceFps } from "../vision/crop";
+import { tui } from "../ui/tui";
+
+const FFMPEG_PATHS = [
+  "/opt/homebrew/opt/ffmpeg-full/bin/ffmpeg",
+  "/usr/local/opt/ffmpeg-full/bin/ffmpeg",
+  "ffmpeg",
+];
+
+const OUTPUT_DIRS = ["clips", "captions", "thumbnails"];
+
+function findFfmpeg(): string {
+  for (const p of FFMPEG_PATHS) {
+    const file = Bun.file(p);
+    if (file.size > 0) return p;
+  }
+  return "ffmpeg";
+}
+
+export async function renderClips(
+  sourceFile: string,
+  selected: ScoredChunk[],
+  subtitleStyle: SubtitleStyle,
+  outputDir: string,
+  cropMode: "9:16" | "1" = "9:16",
+  captions: boolean = true,
+): Promise<void> {
+  ensureOutputDirs(outputDir);
+  const sourceFps = getSourceFps(sourceFile);
+
+  for (let i = 0; i < selected.length; i++) {
+    const chunk = selected[i];
+    const clipNum = String(i + 1).padStart(2, "0");
+    tui.log(`Rendering clip ${clipNum}/${String(selected.length).padStart(2, "0")}...`);
+
+    const clipPath = join(outputDir, "clips", `clip-${clipNum}.mp4`);
+    const srtPath = join(outputDir, "captions", `clip-${clipNum}.srt`);
+    const assPath = srtPath.replace(/\.srt$/, ".ass");
+
+    await Bun.write(srtPath, generateSRT(chunk.chunk.words, subtitleStyle, chunk.chunk.start));
+    if (captions) {
+      await Bun.write(assPath, generateASS(chunk.chunk.words, subtitleStyle, chunk.chunk.start));
+    }
+
+    const cropData = (chunk as any).cropData;
+    await cutClip(sourceFile, clipPath, chunk.chunk.start, chunk.chunk.end, captions ? assPath : undefined, subtitleStyle, cropData, sourceFps, cropMode);
+  }
+}
+
+export async function cutClip(
+  sourceFile: string,
+  outputPath: string,
+  start: number,
+  end: number,
+  srtPath?: string,
+  subtitleStyle?: SubtitleStyle,
+  cropData?: CropFrame[],
+  sourceFps: number = 30,
+  cropMode: "9:16" | "1" = "9:16",
+): Promise<void> {
+  const duration = end - start;
+  const tempRaw = outputPath.replace(".mp4", "-raw.mp4");
+  const filterParts: string[] = [];
+
+  const outH = cropMode === "1" ? 1080 : 1920;
+  const targetAR = cropMode === "1" ? 1 : 9 / 16; // width/height
+
+  if (cropData && cropData.length > 0) {
+    // Follow the detected face region (already computed to the target aspect).
+    const avgX = Math.round(cropData.reduce((s, c) => s + c.x, 0) / cropData.length);
+    const avgY = Math.round(cropData.reduce((s, c) => s + c.y, 0) / cropData.length);
+    filterParts.push(`crop=${cropData[0].width}:${cropData[0].height}:${avgX}:${avgY}`);
+  } else {
+    // No face data: center-crop to fill the target aspect. Never letterbox.
+    filterParts.push(`crop='min(iw,ih*${targetAR})':'min(ih,iw/${targetAR})'`);
+  }
+
+  // The crop already matches the target aspect, so scale exactly — fills the frame, no bars.
+  filterParts.push(`scale=1080:${outH}`);
+
+  const filter = filterParts.join(",");
+
+  const args = [
+    "-ss", String(start),
+    "-i", sourceFile,
+    "-t", String(duration),
+    "-vf", filter,
+    "-c:v", "libx264",
+    "-preset", "fast",
+    "-crf", "22",
+    "-c:a", "aac",
+    "-b:a", "128k",
+    "-y",
+    tempRaw,
+  ];
+
+  const ffmpeg = findFfmpeg();
+
+  const proc = Bun.spawnSync([ffmpeg, ...args], {
+    stdio: ["ignore", "pipe", "pipe"],
+    timeout: 300000,
+  });
+
+  if (proc.exitCode !== 0) {
+    const stderr = proc.stderr.toString();
+    throw new Error(`Render failed for segment ${start}s-${end}s: ${stderr}`);
+  }
+
+  if (srtPath) {
+    // ffmpeg filtergraph: ':' and '\' are special. Use forward slashes and escape the drive colon.
+    const assArg = srtPath.replace(/\\/g, "/").replace(/:/g, "\\:");
+    const subProc = Bun.spawnSync([
+      ffmpeg,
+      "-i", tempRaw,
+      "-vf", `ass='${assArg}'`,
+      "-c:a", "copy",
+      "-y",
+      outputPath,
+    ], {
+      stdio: ["ignore", "pipe", "pipe"],
+      timeout: 120000,
+    });
+
+    if (subProc.exitCode !== 0) {
+      const stderr = subProc.stderr.toString();
+      Bun.spawnSync(["mv", tempRaw, outputPath]);
+      throw new Error(`Subtitle burn-in failed: ${stderr}`);
+    }
+
+    Bun.spawnSync(["rm", tempRaw]);
+  } else {
+    Bun.spawnSync(["mv", tempRaw, outputPath]);
+  }
+}
+
+function ensureOutputDirs(baseDir: string): void {
+  for (const dir of OUTPUT_DIRS) {
+    const fullPath = join(baseDir, dir);
+    if (!existsSync(fullPath)) {
+      Bun.spawnSync(["mkdir", "-p", fullPath]);
+    }
+  }
+}
+
+export async function exportMetadata(
+  metadata: any[],
+  outputDir: string,
+): Promise<void> {
+  const metaPath = join(outputDir, "metadata.json");
+  await Bun.write(metaPath, JSON.stringify(metadata, null, 2));
+
+  const reportPath = join(outputDir, "report.md");
+  const report = generateReport(metadata);
+  await Bun.write(reportPath, report);
+}
+
+function generateReport(metadata: any[]): string {
+  const lines: string[] = [];
+  lines.push("# Skate Export Report");
+  lines.push("");
+  lines.push(`Generated: ${new Date().toISOString()}`);
+  lines.push(`Total clips: ${metadata.length}`);
+  lines.push("");
+  lines.push("## Clips");
+  lines.push("");
+
+  for (const clip of metadata) {
+    lines.push(`### ${clip.title || "Untitled"}`);
+    lines.push(`- Score: ${clip.score}/10`);
+    lines.push(`- Duration: ${clip.duration}s`);
+    lines.push(`- Hashtags: ${(clip.hashtags || []).join(", ")}`);
+    if (clip.hook) lines.push(`- Hook: ${clip.hook}`);
+    lines.push("");
+  }
+
+  return lines.join("\n");
+}
